@@ -9,9 +9,10 @@ Functions are defined in main.py and function detection is hardcoded. After dete
 
 ## Planned Features
 
+In no particular order:
 - Use a Flask server to host the front-end rather than terminal
-- Allow the user to have many rounds of conversation with the assistant
-- Allow the user to save and load their chats
 - Add support for more models
+- Allow custom functions to accept a varying number of parameters
+- Make it possible to select the available functions during the chat session
 - Handle more than one function call per assistant turn
 - Support loading settings from configuration files

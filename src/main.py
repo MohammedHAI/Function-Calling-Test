@@ -60,17 +60,25 @@ def fun_datetime():
 
 # --- parse function
 
+
+def trim_response(response):
+    """
+        Trim the LLM response to remove everything after the function call
+    """
+    end_of_params = response.find(')')
+    return response[0:end_of_params + 1]
+
 def extract_name(response):
     """
         extract function name from LLM response
     """
     
-    end_of_name = response.find('(')
+    start_of_params = response.find('(')
 
-    if end_of_name == -1:
+    if start_of_params == -1:
         return ""
     else:
-        return response[0:end_of_name]
+        return response[0:start_of_params]
 
 def extract_param(response, index):
     """
@@ -92,10 +100,11 @@ def call_function(response, functions):
     """
         given an LLM response, try to call a function if name is found in list
     """
-    result = "{'result': 'Error: function not found'}"
+    result = ""
 
     print("identifying function")
     function_name = extract_name(response)
+    
     if str.isidentifier(function_name):
         function_param1 = extract_param(response, 0)
         function_param2 = extract_param(response, 1)
@@ -110,28 +119,21 @@ def call_function(response, functions):
         elif function_name == functions[3]['name']:
             result = fun_datetime()
 
-    return "\n\n" + str(result) + "\n\n"
+    if len(result) > 0:
+        return "\n\n" + str(result) + "\n\n"
+    else:
+        return result
                 
 
-# --- main
+# --- LLM interaction
 
-def main():
+def generate(chat_history, prompt, functions):
     """
-        Call LLM to provide function, extract and call function, then send response back
+        Generates an LLM response from the user prompt, optionally calling a function
     """
-
-    functions = [{'name': 'add', 'param1': 'a', 'param2': 'b'},
-                 {'name': 'weather', 'param1': 'location'},
-                 {'name': 'pwd'},
-                 {'name': 'datetime'}]
-
-    #prompt = "What's the weather in Moscow?"
-    #prompt = "What's 3 + 4?"
-    #prompt = "What directory am I in?"
-    #prompt = "What's the date and time?"
-    prompt = "What's 3 multiplied by 4? If you don't know, don't answer" # Bogus question with no appropriate function
-
-    print("sending prompt")
+    chat_message = chat_history['choices'][0]['message']['content']
+    
+    #print("sending prompt")
     response = litellm.completion(
         model = "openai/llama3.1",
         api_key = "1234",
@@ -139,35 +141,105 @@ def main():
         messages = [
             {
                 "role": "user",
-                "content":  SYS_PROMPT + START_SEQ + prompt + END_SEQ,
+                "content":  chat_message + START_SEQ + prompt + END_SEQ,
             }
         ],
         max_tokens = 300
     )
 
     response = response['choices'][0]['message']['content']
-    print(response)
-    
+    response = trim_response(response) # keep only the function call
     function_result = call_function(response, functions)
+    history_prompt = START_SEQ + prompt + END_SEQ # for chat history
+
+    if function_result!="":
+        #print("sending 2nd prompt")
+        response2 = litellm.completion(
+            model = "openai/llama3.1",
+            api_key = "1234",
+            api_base = "http://192.168.0.50:5001/v1",
+            messages = [
+                {
+                    "role": "user",
+                    "content":  chat_message + history_prompt + response + function_result,
+                }
+            ],
+            max_tokens = 300
+        )
+
+        response2 = response2['choices'][0]['message']['content']
+    else: # if no function call happened, no need to send back result
+        response2 = ""
+        
+    chat_history['choices'][0]['message']['content'] += (history_prompt + response + function_result + response2)
+    return response2
     
-    print("sending 2nd prompt")
-    response2 = litellm.completion(
-        model = "openai/llama3.1",
-        api_key = "1234",
-        api_base = "http://192.168.0.50:5001/v1",
-        messages = [
-            {
-                "role": "user",
-                "content":  SYS_PROMPT + START_SEQ + prompt + END_SEQ + response + function_result,
-            }
-        ],
-        max_tokens = 300
-    )
 
-    response2 = response2['choices'][0]['message']['content']
-    print(response2)
+def main():
+    """
+        Runs the main program. The user can chat to the assistant in a loop until done
+    """
 
-    print("\n\nFull Chat Log:")
-    print(SYS_PROMPT + START_SEQ + prompt + END_SEQ + response + function_result + response2)
+    functions = [{'name': 'add', 'param1': 'a', 'param2': 'b'},
+                 {'name': 'weather', 'param1': 'location'},
+                 {'name': 'pwd'},
+                 {'name': 'datetime'}]
+
+    chat_history = {"choices": [{"message": {"content": SYS_PROMPT}}]}
+    prompt = ""
+    while prompt!="/X" and prompt!="/x":
+        prompt = input(">")
+
+        if prompt=="/X" or prompt=="/x":
+            pass
+
+        elif prompt=="/P" or prompt=="/p":
+            print(chat_history['choices'][0]['message']['content'] + "\n")
+        
+        elif prompt=="/S" or prompt=="/s":
+            print("NOTICE: If the file already exists, it will be overwritten")
+            path = input("Please enter the name for your chat >")
+            try:
+                if not os.path.exists("chats"): # check for chats folder
+                    os.makedirs("chats")
+                if path[len(path)-4:len(path)]!=".txt": # add .txt if not there
+                    path += ".txt"
+                with open("chats/" + path, 'w') as f:
+                    f.write(chat_history['choices'][0]['message']['content'])
+                    print("NOTICE: Saved chat to chats/" + path + "\n")
+            except Exception as e:
+                print(e)
+                print("ERROR: Unable to save chat\n")
+
+        elif prompt=="/L" or prompt=="/l":
+            path = input("Please enter the name for the chat to load >")
+            try:
+                if path[len(path)-4:len(path)]!=".txt": # add .txt if not there
+                    path += ".txt"
+                with open("chats/" + path, 'r') as f:
+                    chat_history['choices'][0]['message']['content'] = f.read()
+                    print("NOTICE: Successfully loaded chat from chats/" + path + "\n")
+            except Exception as e:
+                print("ERROR: Unable to load chat\n")
+
+        elif prompt=="/N" or prompt=="/n":
+            chat_history = {"choices": [{"message": {"content": SYS_PROMPT}}]}
+            print("NOTICE: New chat session started\n")
+
+        elif prompt=="/H" or prompt=="/h":
+            print("Commands:")
+            print("/P - Print the whole chat session")
+            print("/S - Saves the chat session to a txt file")
+            print("/L - Loads a chat session from a txt file")
+            print("/N - Starts a new chat session")
+            print("/H - Displays this list")
+            print("/X - Exit the program\n")
+            print("All commands can be entered in uppercase or lowercase.\n")
+
+        else:
+            response = generate(chat_history, prompt, functions)
+            print(response)
+
+    print("NOTICE: Exiting...")
 
 main()
