@@ -8,23 +8,7 @@ import json
 from datetime import date
 import time
 
-# --- chat format (llama 3.1)
-
-SYS_PROMPT = '''<|start_header_id|>system<|end_header_id|>\n\nYou have access to the following functions:
-
-add(a, b) - adds 2 numbers and returns the result
-weather(location) - returns the weather of the specified location
-pwd() - returns the current working directory
-datetime() - returns the current date and time
-
-To call a function, simply write its name and the parameters you wish to use. For example, to add 3 and 4, write:
-
-add(3, 4)
-
-'''
-
-START_SEQ = "<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n"
-END_SEQ = "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+CONFIG_PATH = "config.json"
 
 # --- functions (limited to max 2 params)
 
@@ -57,6 +41,15 @@ def fun_datetime():
         returns the current date and time
     """
     return {'date': date.today(), 'time': time.strftime("%H:%M:%S", time.localtime())}
+
+# --- configuration
+
+def load_config():
+    """
+        Loads the configuration for the LLM endpoint and chat format
+    """
+    with open(CONFIG_PATH) as f:
+        return json.loads(f.read())
 
 # --- parse function
 
@@ -96,7 +89,7 @@ def extract_param(response, index):
 
 # --- handle function
 
-def call_function(response, functions):
+def call_function(response, function_list):
     """
         given an LLM response, try to call a function if name is found in list
     """
@@ -110,13 +103,13 @@ def call_function(response, functions):
         function_param2 = extract_param(response, 1)
         print(f"function info: {function_name}({function_param1}, {function_param2})")
         # hardcoded for now
-        if function_name == functions[0]['name']:
+        if function_name == function_list[0]['name']:
             result = fun_add(function_param1, function_param2)
-        elif function_name == functions[1]['name']:
+        elif function_name == function_list[1]['name']:
             result = fun_weather(function_param1)
-        elif function_name == functions[2]['name']:
+        elif function_name == function_list[2]['name']:
             result = fun_pwd()
-        elif function_name == functions[3]['name']:
+        elif function_name == function_list[3]['name']:
             result = fun_datetime()
 
     if len(result) > 0:
@@ -127,7 +120,7 @@ def call_function(response, functions):
 
 # --- LLM interaction
 
-def generate(chat_history, prompt, functions):
+def generate(chat_history, prompt, function_list, BASE_URL="http://localhost", START_SEQ="", END_SEQ=""):
     """
         Generates an LLM response from the user prompt, optionally calling a function
     """
@@ -137,7 +130,7 @@ def generate(chat_history, prompt, functions):
     response = litellm.completion(
         model = "openai/llama3.1",
         api_key = "1234",
-        api_base = "http://192.168.0.50:5001/v1",
+        api_base = BASE_URL + "/v1",
         messages = [
             {
                 "role": "user",
@@ -148,8 +141,8 @@ def generate(chat_history, prompt, functions):
     )
 
     response = response['choices'][0]['message']['content']
-    response = trim_response(response) # keep only the function call
-    function_result = call_function(response, functions)
+    function = trim_response(response) # keep only the function call
+    function_result = call_function(function, function_list)
     history_prompt = START_SEQ + prompt + END_SEQ # for chat history
 
     if function_result!="":
@@ -157,7 +150,7 @@ def generate(chat_history, prompt, functions):
         response2 = litellm.completion(
             model = "openai/llama3.1",
             api_key = "1234",
-            api_base = "http://192.168.0.50:5001/v1",
+            api_base = BASE_URL + "/v1",
             messages = [
                 {
                     "role": "user",
@@ -169,6 +162,7 @@ def generate(chat_history, prompt, functions):
 
         response2 = response2['choices'][0]['message']['content']
     else: # if no function call happened, no need to send back result
+        print(response)
         response2 = ""
         
     chat_history['choices'][0]['message']['content'] += (history_prompt + response + function_result + response2)
@@ -180,10 +174,16 @@ def main():
         Runs the main program. The user can chat to the assistant in a loop until done
     """
 
-    functions = [{'name': 'add', 'param1': 'a', 'param2': 'b'},
-                 {'name': 'weather', 'param1': 'location'},
-                 {'name': 'pwd'},
-                 {'name': 'datetime'}]
+    functions = [{'name': 'add', 'param1': 'a', 'param2': 'b', 'impl': fun_add},
+                 {'name': 'weather', 'param1': 'location', 'impl': fun_weather},
+                 {'name': 'pwd', 'impl': fun_pwd},
+                 {'name': 'datetime', 'impl': fun_datetime}]
+
+    config = load_config()
+    BASE_URL = config['base_url']
+    SYS_PROMPT = config['system_prompt']
+    START_SEQ = config['start_sequence']
+    END_SEQ = config['end_sequence']
 
     chat_history = {"choices": [{"message": {"content": SYS_PROMPT}}]}
     prompt = ""
@@ -237,7 +237,7 @@ def main():
             print("All commands can be entered in uppercase or lowercase.\n")
 
         else:
-            response = generate(chat_history, prompt, functions)
+            response = generate(chat_history, prompt, functions, BASE_URL, START_SEQ, END_SEQ)
             print(response)
 
     print("NOTICE: Exiting...")

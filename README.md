@@ -16,3 +16,5 @@ In no particular order:
 - Make it possible to select the available functions during the chat session
 - Handle more than one function call per assistant turn
 - Support loading settings from configuration files
+- Allow the function calling system to interact with the assistant autonomously
+- Add type hints, comments, clean up the code
